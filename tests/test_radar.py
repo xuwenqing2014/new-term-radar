@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from radar import __main__ as cli
-from radar import breakout, config, gsc, i18n, judge, new_sites, notify, report, review, sitemaps, store
+from radar import breakout, config, gsc, i18n, judge, new_sites, notify, report, review, sitemaps, store, xapi
 from radar.sources import base_name, novel_names
 from radar.terms import names
 
@@ -74,6 +74,18 @@ def test_x_ignores_old_posts_and_retweets():
     old = [_post("a", "Strata is fast", hours_ago=48), _post("b", "Strata rocks", hours_ago=48)]
     rts = [_post("a", "RT @x: Strata is fast"), _post("b", "RT @x: Strata rocks")]
     assert novel_names(old, {}, NOW) == [] and novel_names(rts, {}, NOW) == []
+
+
+def test_xapi_extracts_normalized_user_and_tweets():
+    response = {"success": True, "data": {"rest_id": "42", "tweets": [
+        {"full_text": "Qwen3.9 is out", "favorite_count": 123, "created_at": "2026-10-03T10:00:00Z",
+         "url": "https://x.com/a/status/1"}
+    ]}}
+    assert xapi.user_id(response) == "42"
+    tweet = xapi.tweets(response)[0]
+    assert xapi.text(tweet) == "Qwen3.9 is out"
+    assert xapi.likes(tweet) == 123
+    assert xapi.url(tweet).endswith("/1")
 
 
 # --- ① HF: copies of one model group under its base name -----------------------------

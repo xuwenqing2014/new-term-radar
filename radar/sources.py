@@ -15,7 +15,7 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import UA, aisa, snap
+from . import UA, aisa, snap, xapi
 from .i18n import t
 from .terms import STOP, _drop_nested, names
 
@@ -34,6 +34,12 @@ def accounts(cfg: dict) -> list[str]:
 
 
 def _posted(post: dict) -> datetime | None:
+    value = post.get("createdAt") or post.get("created_at")
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
     try:
         return datetime.strptime(post["createdAt"], "%a %b %d %H:%M:%S %z %Y")
     except (KeyError, ValueError):
@@ -82,10 +88,58 @@ def novel_names(posts: list[dict], vocab: dict[str, str], now: datetime) -> list
     return _drop_nested(kept)[:TOP]
 
 
+def _xapi_new(handles: list[str], state: Path) -> dict:
+    """Read the same account timeline through xAPI and normalize its fields."""
+    users_path = state / "xapi_users.json.gz"
+    users: dict[str, str] = snap.load(users_path) or {}
+    posts, errors, answered = [], [], 0
+    for handle in handles:
+        try:
+            user = users.get(handle)
+            if not user:
+                user = xapi.user_id(xapi.call("twitter.user_by_screen_name", {"screen_name": handle, "provider": "x"}))
+                users[handle] = user
+            data = xapi.call("twitter.user_tweets", {
+                "user_id": user,
+                "include_promoted_content": False,
+                "with_voice": False,
+                "cache": False,
+                "provider": "x",
+            })
+            answered += 1
+            for tw in xapi.tweets(data):
+                created = xapi.created_at(tw)
+                posts.append({"account": handle, "text": xapi.text(tw), "likes": xapi.likes(tw),
+                              "url": xapi.url(tw), "created": _posted({"createdAt": created})})
+        except xapi.XapiError as exc:
+            errors.append(f"{handle}: {exc}")
+    if users:
+        snap.save(users_path, users)
+
+    path = state / "x_vocab.json.gz"
+    vocab: dict[str, str] | None = snap.load(path)
+    first_run = vocab is None
+    rows = [] if first_run else novel_names(posts, vocab, datetime.now(timezone.utc))
+    vocab = vocab or {}
+    today, cutoff = date.today().isoformat(), (date.today() - timedelta(days=VOCAB_DAYS)).isoformat()
+    for p in posts:
+        for term in names(p["text"]):
+            vocab[term] = today
+    if posts:
+        snap.save(path, {term: d for term, d in vocab.items() if d >= cutoff})
+    result = {"accounts": len(handles), "answered": answered, "posts": len(posts), "cost_micros": 0,
+              "first_run": first_run, "terms": rows}
+    if errors:
+        result["error"] = "; ".join(errors[:3])
+    return result
+
+
 def x_new(cfg: dict, state: Path) -> dict:
     handles = accounts(cfg)
     if not handles:
         return {"skipped": True}
+    if xapi.enabled():
+        return _xapi_new(handles, state)
     data, cost = aisa.call_all([{"call_id": h, "tool": "get_twitter_user_last_tweets", "arguments": {"userName": h}}
                                 for h in handles])
     posts = []

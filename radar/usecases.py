@@ -52,7 +52,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import UA, aisa, competition, goanyapi, review, snap
+from . import UA, aisa, competition, goanyapi, review, snap, xapi
 
 POSTS_KEPT = 12
 POST_CHARS = 400
@@ -112,6 +112,45 @@ def _readme(repo: str) -> str:
         return ""
 
 
+def _xapi_evidence(
+    names: list[str],
+    repos: dict[str, str],
+    today: date,
+    texts: dict[str, tuple[str, str]] | None = None,
+) -> tuple[dict[str, dict], int]:
+    """Collect the same popular-post evidence through xAPI's Twitter search."""
+    since = (today - timedelta(days=SEARCH_DAYS)).isoformat()
+    out = {}
+    for n in names:
+        error, posts = "", []
+        try:
+            data = xapi.call("twitter.search", {
+                "raw_query": f'"{n}" -is:reply',
+                "since": since,
+                "min_likes": MIN_FAVES,
+                "count": 20,
+                "sort_by": "Top",
+                "provider": "x",
+            })
+            tweets = xapi.tweets(data)
+            posts = sorted(({
+                "text": " ".join(xapi.text(t).split()),
+                "likes": xapi.likes(t),
+                "by": ((t.get("author") or {}).get("screen_name") or
+                       (t.get("author") or {}).get("userName") or
+                       (t.get("author") or {}).get("username") or "?"),
+                "url": xapi.url(t),
+            } for t in tweets), key=lambda p: -p["likes"])[:POSTS_KEPT]
+        except xapi.XapiError as exc:
+            error = " ".join(re.sub(r"<[^>]+>", " ", str(exc)).split())[:80]
+        readme = _readme(repos[n]) if repos.get(n) else ""
+        repo = repos.get(n, "")
+        if not readme and (texts or {}).get(n):
+            repo, readme = texts[n]
+        out[n] = {"posts": posts, "readme": readme, "repo": repo, "error": error}
+    return out, 0
+
+
 def evidence(names: list[str], repos: dict[str, str], today: date,
              texts: dict[str, tuple[str, str]] | None = None) -> tuple[dict[str, dict], int]:
     """{name: {"posts": [...], "readme": str, "error": str}} and the cost in micro-USD.
@@ -120,6 +159,8 @@ def evidence(names: list[str], repos: dict[str, str], today: date,
     search takes 15 to 25 seconds, and its gateway gives up at 60, so two names in one
     request timed out twice on 2026-10-13 while each alone answered. A name whose search
     fails goes on with its README and the related queries, and the table says so."""
+    if xapi.enabled():
+        return _xapi_evidence(names, repos, today, texts)
     since = (today - timedelta(days=SEARCH_DAYS)).isoformat()
     out, cost = {}, 0
     for n in names:

@@ -133,6 +133,8 @@ TrustMRR 的 API 条款禁止转载它的数据，也禁止拿它做公开的 SE
 
 所有付费的部分都走 [AIsa](https://go.aisa.one/yansen-zhu)：X 帖子、Google Trends 和域名数据（背后是 DataForSEO）、判断名字的模型。一个 key，按次付费，不用分别订阅 X API 和 DataForSEO。
 
+也可以把 X 的读取改走 [xAPI](https://www.xapi.to/capabilities)：在 `.env` 中设置 `XAPI_KEY=...`，运行前执行 `set -a; source .env; set +a`。xAPI 会替代账号时间线和推文搜索；`AISA_API_KEY` 仍用于名字判断、Google Trends 和新词表。
+
 > 上面是推荐链接：通过它注册是对这个项目的支持。从 aisa.one 任何入口拿到的 key 用起来完全一样。
 
 **可选：`GOANYAPI_API_KEY`**（[goanyapi.com](https://goanyapi.com/r/ga-95708898fb)）从两方面改进新词表，每天约 $0.07：给每个名字加上 Google Trends 的相关查询；名字和规模较大的通用词（月搜 1,000 以上，最多 8 行）的走势，改用单个国家的 30 天日数据来读，这份数据结算到昨天。这些行的「现在」一列后面会标出国家，例如 `还在涨 (US)`。不配这个 key，新词表只用模型提出的写法和全球数据。这个服务很新（2026 年 8 月才发布）；我们测试时每次调用要 20 到 55 秒，大约十次有一次失败，所以雷达会试两次，失败就写在表里，继续往下跑。上面这个也是推荐链接。
