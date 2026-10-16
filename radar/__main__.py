@@ -59,7 +59,7 @@ def _finish(args, text: str, subject: str) -> None:
     if args.out:
         Path(args.out).write_text(text)
     print(text)
-    if args.mail:
+    if args.mail or notify.enabled():
         print(notify.send(subject, text))
 
 
@@ -195,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--extension", action="append", default=[], metavar="ID", help="for `pains`: a Chrome extension to read the reviews of")
     p.add_argument("--mail", action="store_true", help="mail the report (see radar/notify.py)")
     args = p.parse_args(argv)
+    config.load_env(Path(args.config).resolve().parent / ".env")
     args.skip = {s for s in args.skip.split(",") if s}
     unknown = args.skip - SKIPPABLE
     if unknown:

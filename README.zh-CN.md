@@ -217,6 +217,24 @@ python scripts/gsc_auth.py gsc_client.json   # 打开一次浏览器授权，写
 
 ### 邮件（可选）
 
+本机运行会自动读取 `config.json` 同目录的 `.env`，已设置的进程环境变量优先。
+如需通过现有邮箱的 SMTP 发送，可以在 `.env` 中设置：
+
+```dotenv
+RADAR_SEND_EMAIL=true
+RADAR_MAIL_BACKEND=smtp
+TRENDS_SMTP_SERVER=smtp.gmail.com
+TRENDS_SMTP_PORT=465
+TRENDS_SENDER_EMAIL=your-email@gmail.com
+TRENDS_SENDER_PASSWORD=your-app-password
+TRENDS_RECIPIENT_EMAIL=your-email@gmail.com
+```
+
+开启后，`python -m radar daily --out report.md` 会自动发送正文和 Markdown 附件；
+`sources` 只在生成报告时发送。465 使用 SSL，其他端口使用 STARTTLS。
+设置 `RADAR_SEND_EMAIL=false` 可关闭自动发送，仍可通过 `--mail` 单次发送。
+这只配置运行后的发送，不会创建定时任务。密钥仅保存在 Git 忽略的 `.env` 中。
+
 `--mail` 通过 [Resend](https://resend.com) 发送报告。设置 `RESEND_API_KEY`、`EMAIL_FROM`（你在 Resend 验证过的域名下的地址）和 `RADAR_EMAIL_TO`（多个用逗号分隔）。要 HTML 版需要 `pip install markdown`。
 
 ## 在 agent 里用：skill 和 MCP 服务器

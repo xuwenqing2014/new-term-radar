@@ -6,6 +6,8 @@ choose. Secrets are never read from this file; they come from the environment.
 from __future__ import annotations
 
 import json
+import os
+import shlex
 from pathlib import Path
 
 from . import i18n, terms
@@ -37,6 +39,18 @@ DEFAULTS = {
     "tutorials": {"max_leads": 3, "videos": 3, "model": "gpt-4.1-mini"},
     "gsc": {},
 }
+
+
+def load_env(path: Path) -> None:
+    """Load simple KEY=value entries without overriding the process environment."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.removeprefix("export ").split("=", 1)
+        os.environ.setdefault(key.strip(), " ".join(shlex.split(value, comments=True)))
 
 
 def load(path: Path) -> dict:

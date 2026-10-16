@@ -1,17 +1,23 @@
-"""Mail a report (Markdown) through Resend. Optional.
+"""Mail a report (Markdown) through Resend or SMTP. Optional.
 
 Environment: RESEND_API_KEY, EMAIL_FROM (an address on a domain you verified in Resend),
 RADAR_EMAIL_TO (comma-separated for several). Without RADAR_EMAIL_TO it says so and does
 nothing: a missing recipient must not fail the run that produced the report.
 Needs the `markdown` package (pip install markdown).
+SMTP: RADAR_MAIL_BACKEND=smtp and TRENDS_SMTP_SERVER/PORT,
+TRENDS_SENDER_EMAIL/PASSWORD, TRENDS_RECIPIENT_EMAIL. RADAR_SEND_EMAIL=true
+automatically mails reports from daily/sources without --mail.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import smtplib
+import ssl
 import urllib.error
 import urllib.request
+from email.message import EmailMessage
 
 from . import UA
 
@@ -53,13 +59,46 @@ def recipients(raw: str) -> list[str]:
     return [p.strip("\"'<>") for p in parts if p.strip("\"'<>")]
 
 
+def enabled() -> bool:
+    return os.environ.get("RADAR_SEND_EMAIL", "").lower() in {"1", "true", "yes"}
+
+
+def _smtp(subject: str, md_text: str, to: list[str]) -> str:
+    sender = os.environ["TRENDS_SENDER_EMAIL"]
+    password = os.environ["TRENDS_SENDER_PASSWORD"]
+    host = os.environ.get("TRENDS_SMTP_SERVER", "smtp.gmail.com")
+    port = int(os.environ.get("TRENDS_SMTP_PORT", "587"))
+    use_ssl = os.environ.get("TRENDS_SMTP_USE_SSL", str(port == 465)).lower() in {"1", "true", "yes"}
+    msg = EmailMessage()
+    msg["From"], msg["To"], msg["Subject"] = sender, ", ".join(to), subject
+    msg.set_content(md_text)
+    msg.add_alternative(html(md_text), subtype="html")
+    msg.add_attachment(md_text.encode("utf-8"), maintype="text", subtype="markdown", filename="radar-report.md")
+    context = ssl.create_default_context()
+    smtp_cls = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+    kwargs = {"context": context} if use_ssl else {}
+    with smtp_cls(host, port, timeout=30, **kwargs) as server:
+        if not use_ssl:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+        server.login(sender, password)
+        refused = server.send_message(msg, from_addr=sender, to_addrs=to)
+        if refused:
+            raise RuntimeError(f"mail delivery rejected for {len(refused)} recipient(s)")
+    return "mail sent (SMTP accepted)"
+
+
 def send(subject: str, md_text: str) -> str:
-    to = recipients(os.environ.get("RADAR_EMAIL_TO", ""))
+    smtp = os.environ.get("RADAR_MAIL_BACKEND", "resend").lower() == "smtp"
+    to = recipients(os.environ.get("RADAR_EMAIL_TO") or (os.environ.get("TRENDS_RECIPIENT_EMAIL", "") if smtp else ""))
     if not to:
         return "mail skipped: RADAR_EMAIL_TO not set"
     bad = [i + 1 for i, a in enumerate(to) if not _ADDRESS.match(a)]
     if bad:   # the address itself stays out of the log
         raise SystemExit(f"RADAR_EMAIL_TO: {len(to)} address(es), number {bad} is not an email address")
+    if smtp:
+        return _smtp(subject, md_text, to)
     body = json.dumps({"from": os.environ["EMAIL_FROM"], "to": to, "subject": subject, "html": html(md_text)}).encode()
     # Resend sits behind Cloudflare, which answers Python's default User-Agent with 403 "error code: 1010".
     req = urllib.request.Request("https://api.resend.com/emails", data=body, method="POST", headers={
