@@ -6,8 +6,8 @@ arrives settled up to yesterday (DataForSEO's worldwide series does not). Key: G
 this source and the radar runs as before.
 
 One credit is $0.001; a related-queries lookup costs 6 (October 2026). Calls take 20 to
-55 seconds and about one in ten fails with a timeout or a 502, so a call is tried twice
-and a failure is reported, never fatal. The service is young (first released August
+55 seconds and about one in ten fails with a timeout or a 502. Each call is attempted
+once; a failure is reported, never fatal, and subsequent calls proceed normally. The service is young (first released August
 2026): treat it as an enhancement, not a dependency.
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timezone
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,8 +24,8 @@ from . import UA
 
 BASE = os.environ.get("GOANYAPI_BASE_URL", "https://api.goanyapi.com") + "/api/v1/"
 TIMEOUT = 90
-TRIES = 2
 MICROS_PER_CREDIT = 1000
+CREDIT_ERROR = "GoAnyAPI credits exhausted; continuing with available sources"
 
 
 class GoAnyError(RuntimeError):
@@ -35,28 +36,40 @@ def key() -> str:
     return os.environ.get("GOANYAPI_API_KEY", "").strip()
 
 
+def _credits_exhausted(body: object) -> bool:
+    """Recognize credit errors in both JSON error codes and plain-text messages."""
+    message = re.sub(r"[_-]+", " ", str(body).lower())
+    return bool(re.search(
+        r"(?:insufficient|exhausted|depleted|not enough|out of|no remaining)\s+(?:\w+\s+){0,2}(?:credits?|balance|quota)"
+        r"|(?:credits?|balance|quota)\s+(?:\w+\s+){0,2}(?:insufficient|exhausted|depleted|exceeded)"
+        r"|积分不足|余额不足|额度不足|积分耗尽|配额耗尽", message))
+
+
 def call(path: str, **params) -> tuple[dict, int]:
-    """One GET. Returns (data, cost in micro-USD)."""
+    """One GET, without retries or pauses. Returns (data, cost in micro-USD)."""
     req = urllib.request.Request(BASE + path + "?" + urllib.parse.urlencode(params), headers={
         "authorization": f"Bearer {key()}", "accept": "application/json", "user-agent": UA})
-    error = ""
-    for _ in range(TRIES):
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+            body = json.load(res)
+    except urllib.error.HTTPError as exc:
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
-                body = json.load(res)
-        except urllib.error.HTTPError as exc:
-            error = f"HTTP {exc.code}"
-            if exc.code < 500:
-                break
-            continue
-        except (OSError, ValueError) as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            continue
-        data = body.get("data") or {}
-        if body.get("code") != "ok":
-            raise GoAnyError(str(body.get("message") or body)[:160])
-        return data, int(data.get("costCredits") or data.get("creditsUsed") or 0) * MICROS_PER_CREDIT
-    raise GoAnyError(error[:160])
+            detail = exc.read(8192).decode("utf-8", errors="replace")
+        except OSError:
+            detail = ""
+        if exc.code == 402 or _credits_exhausted(detail):
+            raise GoAnyError(CREDIT_ERROR) from None
+        raise GoAnyError(f"HTTP {exc.code}") from None
+    except (OSError, ValueError) as exc:
+        raise GoAnyError(f"{type(exc).__name__}: {exc}"[:160]) from None
+    if not isinstance(body, dict):
+        raise GoAnyError("Invalid GoAnyAPI response")
+    if body.get("code") != "ok":
+        if _credits_exhausted(body):
+            raise GoAnyError(CREDIT_ERROR)
+        raise GoAnyError(str(body.get("message") or body)[:160])
+    data = body.get("data") or {}
+    return data, int(data.get("costCredits") or data.get("creditsUsed") or 0) * MICROS_PER_CREDIT
 
 
 def related_queries(term: str, geo: str = "US", window: str = "today 1-m") -> tuple[dict[str, list[str]], int]:
